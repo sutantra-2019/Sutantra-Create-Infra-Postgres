@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS Postgres Creation'
+
+Parameters:
+
+  pVPC:
+    Type: AWS::EC2::VPC::Id
+    Description: 'VPC where the RDS Postgres use to launch the DB'
+      
+  pDBAllocatedStorage:
+    Description: 'The allocated storage size, specified in GB (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Type: Number
+    Default: 5
+    MinValue: 5
+    MaxValue: 16384
+    
+  pDBInstanceClass:
+    Description: 'The instance type of database server.'
+    Type: String
+    Default: 'db.t2.micro'    
+    AllowedValues:
+      - db.t2.micro
+      - db.t2.small
+      - db.t2.medium
+      - db.t2.large
+      - db.t2.xlarge
+      - db.t2.2xlarge    
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.t3.xlarge
+      - db.t3.2xlarge
+      - db.m5.large
+      - db.m5.xlarge
+      - db.m5.2xlarge
+      - db.m5.4xlarge
+      - db.m5.12xlarge
+      - db.m5.24xlarge
+    ConstraintDescription: Must be a valid RDS DB Instance Class
+    Description: DB instance class type for the RDS Postgres
+    
+  pDBName:
+    Description: 'Name of the database (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Type: String
+    Default: 'contentserver'
+
+  pDBBackupRetentionPeriod:
+    Description: 'The number of days to keep snapshots of the database.'
+    Type: Number
+    MinValue: 0
+    MaxValue: 35
+    Default: 30
+
+  pDBMasterUsername:
+    Description: 'The master user name for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Type: String
+    Default: master
+    
+  pDBMasterUserPassword:
+    Description: 'The master password for the DB instance (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Type: String
+    NoEcho: true
+    Default: 'master123'
+
+  pDBMultiAZ:
+    Description: 'Specifies if the database instance is deployed to multiple Availability Zones for HA.'
+    Type: String
+    Default: true
+    AllowedValues: [true, false]    
+  
+  pPreferredBackupWindow:
+    Description: 'The daily time range in UTC during which you want to create automated backups.'
+    Type: String
+    Default: '09:54-10:24'
+    
+  pPreferredMaintenanceWindow:
+    Description: The weekly time range (in UTC) during which system maintenance can occur.
+    Type: String
+    Default: 'sat:07:00-sat:07:30'
+    
+  pDBEngineVersion:
+    Description: 'PostgreSQL version.'
+    Type: String
+    Default: '11.2'
+    AllowedValues: ['11.2', '11.1', '10.7', '10.6', '10.5', '10.4', '10.3', '10.1', '9.6.12', '9.6.5', '9.5.16', '9.4.21', '9.3.25'] # aws rds describe-db-engine-versions --engine postgres --query "DBEngineVersions[].EngineVersion"  
+
+  pSubnetIDs:
+    Description: 'Subnet IDs which needs to be used for RDS Postgres'
+    Type: "List<AWS::EC2::Subnet::Id>"
+    Default: subnet-0f63aa3caf80d6095,subnet-032f8ab2f41c18469,subnet-09abb2a811197f84d,subnet-04c156f47212c3ae1
+    
+  pDBParameterGroupName:
+    Description: 'Optional name of an existing DB parameter group.'
+    Type: String
+    Default: ''
+
+  pDBSnapshotIdentifier:
+    Description: 'Optional name or Amazon Resource Name (ARN) of the DB snapshot from which you want to restore (leave blank to create an empty database).'
+    Type: String
+    Default: ''
+
+  pEnableIAMDatabaseAuthentication:
+    Description: 'Enable mapping of AWS Identity and Access Management (IAM) accounts to database accounts (https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/UsingWithRDS.IAMDBAuth.html).'
+    Type: String
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+
+  pParentKmsKeyStack:
+    Description: 'Optional Stack name of parent KMS key stack based on security/kms-key.yaml template (ignored when DBSnapshotIdentifier is set, value used from snapshot).'
+    Type: String
+    Default: ''    
+
+  pDBOptionGroupName:
+    Description: 'Optional name of an existing DB option group.'
+    Type: String
+    Default: ''
+    
+  pSecurityGrpName:
+    Description: 'To allow EKS to Connect to Postgres'
+    Type: String
+    Default: 'PGE-ECM-D2-Postgres'
+
+  pDBInstanceIdentifier:
+    Type: String
+    Description: 'Identifier name for the DB Instance'
+    Default: 'pge-ecm-contentserver'
+    
+Conditions:
+
+  HasKmsKey: !Not [!Equals [!Ref pParentKmsKeyStack, '']]
+  HasDBSnapshotIdentifier: !Not [!Equals [!Ref pDBSnapshotIdentifier, '']]
+  HasDBOptionGroupName: !Not [!Equals [!Ref pDBOptionGroupName, '']]
+  HasDBParameterGroupName: !Not [!Equals [!Ref pDBParameterGroupName, '']]
+  HasKmsKeyAndNotDBSnapshotIdentifier: !And [!Condition HasKmsKey, !Not [!Condition HasDBSnapshotIdentifier]]
+  
+Resources:
+
+  DatabaseSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group To Allow EKS To Connect to Postgres'
+      GroupName: !Ref pSecurityGrpName      
+      VpcId: !Ref pVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        CidrIp: "10.90.0.0/16"
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupId: "sg-058d8abe396755c6e"
+        
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Ref 'AWS::StackName'
+      SubnetIds: !Ref pSubnetIDs
+
+  DBInstance:
+    DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      AllocatedStorage: !Ref pDBAllocatedStorage
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: !Ref pDBBackupRetentionPeriod
+      CopyTagsToSnapshot: true
+      DBInstanceClass: !Ref pDBInstanceClass
+      DBName: !Ref pDBName
+      DBInstanceIdentifier: !Ref pDBInstanceIdentifier     
+      DBParameterGroupName: !If [HasDBParameterGroupName, !Ref pDBParameterGroupName, !Ref 'AWS::NoValue']
+      DBSnapshotIdentifier: !If [HasDBSnapshotIdentifier, !Ref pDBSnapshotIdentifier, !Ref 'AWS::NoValue']
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      EnableIAMDatabaseAuthentication: !Ref pEnableIAMDatabaseAuthentication
+      Engine: postgres
+      EngineVersion: !Ref pDBEngineVersion
+      KmsKeyId: !If [HasKmsKeyAndNotDBSnapshotIdentifier, {'Fn::ImportValue': !Sub '${pParentKmsKeyStack}-KeyId'}, !Ref 'AWS::NoValue']
+      MasterUsername: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref pDBMasterUsername]
+      MasterUserPassword: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref pDBMasterUserPassword]
+      MultiAZ: !Ref pDBMultiAZ
+      OptionGroupName: !If [HasDBOptionGroupName, !Ref pDBOptionGroupName, !Ref 'AWS::NoValue']
+      PreferredBackupWindow: !Ref pPreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref pPreferredMaintenanceWindow
+      StorageType: gp2
+      StorageEncrypted: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !If [HasKmsKey, true, false]]
+      VPCSecurityGroups:
+      - !Ref DatabaseSecurityGroup
